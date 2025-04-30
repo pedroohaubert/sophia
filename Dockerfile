@@ -24,6 +24,7 @@ RUN apt-get update -qq && \
 # Install node modules
 COPY --link package-lock.json package.json ./
 RUN pnpm install
+RUN pnpm exec npm rebuild bcrypt --build-from-source
 
 # Generate Prisma Client
 COPY --link prisma .

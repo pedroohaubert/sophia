@@ -112,7 +112,7 @@ async function handleChatPost(req: Request) {
   if (typeof userIdOrResponse !== "string") return userIdOrResponse;
 
   const userId = userIdOrResponse;
-  const model = openai("gpt-4.1");
+  const model = openai("gpt-4.1-mini");
 
   const result = await streamText({
     system: `**Data Atual:** ${new Date().toISOString().split('T')[0]}

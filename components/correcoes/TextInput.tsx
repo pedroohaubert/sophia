@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { Editor } from '@tinymce/tinymce-react';
 
 interface TextInputProps {
@@ -7,18 +7,21 @@ interface TextInputProps {
 }
 
 const TextInput: React.FC<TextInputProps> = ({ texto, setTexto }) => {
+    const editorRef = useRef<any>(null);
+    
     return (
         <Editor
-            apiKey="biovjne3ik61o21mw48l06ylvamdd8hecytfwz1frw55ztsy" // Sua chave de API
-            value={texto}
+            apiKey="biovjne3ik61o21mw48l06ylvamdd8hecytfwz1frw55ztsy"
+            onInit={(_evt, editor) => editorRef.current = editor}
+            initialValue={texto}
             init={{
-                height: 300, // Altura inicial
-                menubar: true, // Habilitar barra de menu
+                height: 300,
+                menubar: true,
                 plugins: [
                     'advlist', 'autolink', 'lists', 'link', 'image', 'charmap', 'preview',
                     'anchor', 'searchreplace', 'visualblocks', 'code', 'fullscreen',
                     'insertdatetime', 'media', 'table', 'code', 'help', 'wordcount',
-                    'resize' // Habilitar plugin de redimensionamento
+                    'resize'
                 ],
                 toolbar:
                     'undo redo | blocks | '
@@ -26,10 +29,12 @@ const TextInput: React.FC<TextInputProps> = ({ texto, setTexto }) => {
                     + 'alignright alignjustify | bullist numlist outdent indent | '
                     + 'removeformat | help',
                 content_style: 'body { font-family:Helvetica,Arial,sans-serif; font-size:14px }',
-                resize: 'both' // Permitir redimensionamento vertical e horizontal
-            }}
-            onEditorChange={(content: string, editor: Editor) => {
-                setTexto(content);
+                resize: 'both',
+                setup: (editor) => {
+                    editor.on('Change', () => {
+                        setTexto(editor.getContent());
+                    });
+                }
             }}
         />
         /*

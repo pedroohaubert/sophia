@@ -2,8 +2,7 @@ import React from 'react'
 import { Button } from "@nextui-org/react"
 import { Card, CardHeader, CardBody, CardFooter } from "@nextui-org/react"
 import { Badge } from "@nextui-org/react"
-import { ChevronDown, ChevronUp, Clock, Calendar, Share, Download, Printer } from 'lucide-react'
-import {Snippet} from "@nextui-org/snippet";
+import { ChevronDown, ChevronUp, Clock, Share } from 'lucide-react'
 import { useState } from 'react'
 
 export default function StudyItineraryPage(data: {data:any}) {
