@@ -1,11 +1,5 @@
 import React from 'react';
 import { Editor } from '@tinymce/tinymce-react';
-import { Editor as TinyMCEEditor } from '@tinymce/tinymce-react';
-
-// Remover imports e código relacionado a ReactQuill
-// import dynamic from 'next/dynamic';
-// import 'react-quill/dist/quill.snow.css'; 
-// const ReactQuill = dynamic(() => import('react-quill'), { ssr: false });
 
 interface TextInputProps {
     texto: string;
@@ -34,7 +28,7 @@ const TextInput: React.FC<TextInputProps> = ({ texto, setTexto }) => {
                 content_style: 'body { font-family:Helvetica,Arial,sans-serif; font-size:14px }',
                 resize: 'both' // Permitir redimensionamento vertical e horizontal
             }}
-            onEditorChange={(content: string, editor: TinyMCEEditor) => {
+            onEditorChange={(content: string, editor: Editor) => {
                 setTexto(content);
             }}
         />
