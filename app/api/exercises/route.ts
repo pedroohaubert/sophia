@@ -81,7 +81,7 @@ const EssayQuestionSchema = z.object({
 
 const QuestionSchema = z.union([AlternativeQuestionSchema, EssayQuestionSchema]);
 
-export const ExerciseSchema = z.object({
+const ExerciseSchema = z.object({
   questions: z.array(QuestionSchema),
 });
 

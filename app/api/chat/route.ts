@@ -6,7 +6,36 @@ import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
-import { ExerciseSchema } from "../exercises/route";
+
+// Zod Schema for Exercises
+const OptionSchema = z.object({
+  a: z.string(),
+  b: z.string(),
+  c: z.string(),
+  d: z.string(),
+});
+
+const AlternativeQuestionSchema = z.object({
+  question: z.string(),
+  type: z.literal("alternativa"),
+  options: OptionSchema,
+  correct_answer: z.enum(["a", "b", "c", "d"]),
+  explanation: z.string(),
+  source: z.union([z.string(), z.null()]),
+});
+
+const EssayQuestionSchema = z.object({
+  question: z.string(),
+  type: z.literal("dissertativa"),
+  answer: z.string(),
+  source: z.union([z.string(), z.null()]),
+});
+
+const QuestionSchema = z.union([AlternativeQuestionSchema, EssayQuestionSchema]);
+
+const ExerciseSchema = z.object({
+  questions: z.array(QuestionSchema),
+});
 
 const openAI = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
