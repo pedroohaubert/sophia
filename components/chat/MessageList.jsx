@@ -26,7 +26,7 @@ const MessageList = ({ messages, isLoadingMessages }) => {
   };
 
   return (
-    <ScrollShadow className="flex-1 overflow-y-auto p-4 md:px-40 scrollbar-hide">
+    <ScrollShadow className="flex-1 overflow-y-auto p-4 md:px-20 scrollbar-hide">
       {isLoadingMessages ? (
         <div className="text-center p-4">Carregando mensagens...</div>
       ) : (
@@ -36,7 +36,7 @@ const MessageList = ({ messages, isLoadingMessages }) => {
               key={index}
               className={`p-3 rounded-xl max-w-full md:max-w-[80%] ${
                 m.role === 'user'
-                  ? 'bg-gray-200 self-end flex flex-col w-full md:w-fit shadow-md'
+                  ? 'bg-gray-50 self-end flex flex-col w-full md:w-fit shadow-md'
                   : 'self-start w-full'
               }`}
               initial="hidden"

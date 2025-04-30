@@ -10,6 +10,10 @@ type SummaryProps = {
 }
 
 export default function CorrectionSummary({ summary }: SummaryProps) {
+    if (!summary) {
+        return null // Ou um componente de loading/placeholder
+    }
+
     return (
         <Card>
             <CardHeader>

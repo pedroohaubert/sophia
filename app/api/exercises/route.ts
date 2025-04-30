@@ -2,6 +2,8 @@ import OpenAI from "openai";
 import { verifyJWT } from "@/lib/util";
 import { PrismaClient, Prisma } from "@prisma/client";
 import { v4 as uuidv4 } from "uuid";
+import { z } from "zod";
+import { zodResponseFormat } from "openai/helpers/zod";
 
 const prisma = new PrismaClient();
 
@@ -53,9 +55,39 @@ async function handleAuthentication(request: Request): Promise<string | Response
   return new Response("Token inválido", { status: 401 });
 }
 
+// Zod Schema for Exercises
+const OptionSchema = z.object({
+  a: z.string(),
+  b: z.string(),
+  c: z.string(),
+  d: z.string(),
+});
+
+const AlternativeQuestionSchema = z.object({
+  question: z.string(),
+  type: z.literal("alternativa"),
+  options: OptionSchema,
+  correct_answer: z.enum(["a", "b", "c", "d"]),
+  explanation: z.string(),
+  source: z.union([z.string(), z.null()]),
+});
+
+const EssayQuestionSchema = z.object({
+  question: z.string(),
+  type: z.literal("dissertativa"),
+  answer: z.string(),
+  source: z.union([z.string(), z.null()]),
+});
+
+const QuestionSchema = z.union([AlternativeQuestionSchema, EssayQuestionSchema]);
+
+export const ExerciseSchema = z.object({
+  questions: z.array(QuestionSchema),
+});
+
 async function generateOptimizedQueries(parameters: ExerciseParameters): Promise<string[]> {
   const query = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "gpt-4.1-nano",
     messages: [
       {
         role: "system",
@@ -80,7 +112,8 @@ async function generateOptimizedQueries(parameters: ExerciseParameters): Promise
 
 async function fetchWebContent(query: string): Promise<any[]> {
   try {
-    const busca = `${JINA_URL}${query}`;
+    const formattedQuery = query.replace(/ /g, "%20");
+    const busca = `${JINA_URL}${formattedQuery}`;
     console.log(busca);
 
     const webContent = await fetch(busca, {
@@ -89,6 +122,8 @@ async function fetchWebContent(query: string): Promise<any[]> {
         Authorization: `Bearer ${JINA_API_KEY}`,
         Accept: "application/json",
         "X-Locale": "pt-BR",
+        "X-With-Generated-Alt": "true",
+        "X-Engine": "direct"
       },
     });
 
@@ -102,20 +137,90 @@ async function fetchWebContent(query: string): Promise<any[]> {
 
 async function generateExercises(parameters: ExerciseParameters): Promise<any> {
   const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    response_format: { type: "json_object" },
+    model: "o4-mini",
+    reasoning_effort: "medium",
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "webSearch",
+          description: "Buscar conteúdo na web, utilize essa ferramenta para buscar conteúdo na web para complementar suas respostas. Utilize sempre que precisar de mais informações sobre um tópico ou para enriquecer os exercícios com exemplos e contextos atualizados.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "Query para busca na web"
+              }
+            },
+            required: ["query"],
+            additionalProperties: false
+          }
+        }
+      }
+    ],
+    tool_choice: "auto",
+    response_format: zodResponseFormat(ExerciseSchema, "exercises"),
     messages: [
       {
         role: "system",
-        content: "Você é um assistente de IA educacional projetado para gerar exercícios com base na entrada do usuário. Responda com um JSON contendo os exercícios solicitados, seguindo os parâmetros fornecidos. O parâmetro WebContent irá conter links de sites e seus respectivos conteúdos que devem conter exercícios sobre o tema. Utilize esse conteúdo para gerar os exercícios. Dê preferência para exercícios que estejam dentro do WebContent, e coloque juntamente do enunciado deles o seu link original. A resposta deve ser um JSON válido, sem quebras de linha ou outros caracteres especiais, e deve incluir um array chamado 'questions'. Cada item deste array deve conter os seguintes atributos: 'question': O texto da pergunta. 'type': O tipo de questão, que pode ser 'alternativa' ou 'dissertativa'. Se o tipo for 'alternativa', deve conter um objeto 'options' com as propriedades 'a', 'b', 'c', e 'd', cada uma com o texto da respectiva alternativa. O item também deve conter um 'correct_answer' com a letra da alternativa correta e uma 'explanation' explicando por que essa resposta está correta. Se o tipo for 'dissertativa', deve conter um 'answer' com a resposta por extenso. Caso o exercício tenha sua fonte como um dos sites do WebContent, coloque o link original do site na propriedade 'source' do exercício. Tome cuidado para não criar alternativas muito grandes que possam exceder 120 caracteres."
+        content: "Você é um assistente de IA educacional projetado para gerar exercícios com base na entrada do usuário. Responda seguindo o schema definido para exercícios. O parâmetro WebContent irá conter links de sites e seus respectivos conteúdos que devem conter exercícios sobre o tema. Utilize esse conteúdo para gerar os exercícios. Dê preferência para exercícios que estejam dentro do WebContent, e coloque juntamente do enunciado deles o seu link original. Se precisar de mais informações sobre o tema ou exemplos adicionais, você pode utilizar a ferramenta de busca na web para encontrar conteúdo relevante. Tome cuidado para não criar alternativas muito grandes que possam exceder 120 caracteres."
       },
       {
         role: "user",
         content: JSON.stringify(parameters),
       },
     ],
-    temperature: 1,
-    max_tokens: 16384,
+    max_completion_tokens: 100000,
+    top_p: 1,
+    frequency_penalty: 0,
+    presence_penalty: 0,
+  });
+
+  // Processar tool_calls se houver
+  const toolCalls = response.choices[0].message.tool_calls;
+  if (toolCalls && toolCalls.length > 0) {
+    const webSearchCalls = toolCalls.filter(
+      (call) => call.function.name === "webSearch"
+    );
+    
+    const results = await Promise.all(
+      webSearchCalls.map(async (call) => {
+        const args = JSON.parse(call.function.arguments);
+        return await fetchWebContent(args.query);
+      })
+    );
+    
+    // Adicionar resultados aos parâmetros
+    parameters.webContent = [
+      ...(parameters.webContent || []),
+      ...results.flat()
+    ];
+    
+    // Segunda chamada para incorporar os resultados
+    return await generateExercisesWithResults(parameters);
+  }
+
+  return JSON.parse(response.choices[0].message?.content ?? "");
+}
+
+// Função adicional para gerar os exercícios finais com os resultados da busca
+async function generateExercisesWithResults(parameters: ExerciseParameters): Promise<any> {
+  const response = await openai.chat.completions.create({
+    model: "o4-mini",
+    reasoning_effort: "medium",
+    response_format: zodResponseFormat(ExerciseSchema, "exercises"),
+    messages: [
+      {
+        role: "system",
+        content: "Você é um assistente de IA educacional projetado para gerar exercícios com base na entrada do usuário e nos resultados de busca na web. Responda seguindo o schema definido para exercícios. Utilize o conteúdo do parâmetro webContent para gerar exercícios de qualidade, citando as fontes quando disponíveis. Tome cuidado para não criar alternativas muito grandes que possam exceder 120 caracteres."
+      },
+      {
+        role: "user",
+        content: JSON.stringify(parameters),
+      },
+    ],
+    max_completion_tokens: 100000,
     top_p: 1,
     frequency_penalty: 0,
     presence_penalty: 0,
@@ -206,21 +311,21 @@ export async function PUT(request: Request) {
 async function createAssistant(userId: string, tema: string) {
   return await openai.beta.assistants.create({
     name: `${tema}_${userId}`,
-    model: "gpt-4o-mini",
+    model: "gpt-4.1-mini",
     tools: [{ type: "file_search" }],
     instructions: 'Você é um assistente de IA educacional projetado para gerar exercícios com base na entrada do usuário. Responda com um JSON contendo os exercícios solicitados, seguindo os parâmetros fornecidos. A resposta deve ser um JSON válido, sem quebras de linha ou outros caracteres especiais, e deve incluir um array chamado "questions". Cada item deste array deve conter os seguintes atributos: "question": O texto da pergunta. "type": O tipo de questão, que pode ser "alternativa" ou "dissertativa". Se o tipo for "alternativa", deve conter um objeto "options" com as propriedades "a", "b", "c", e "d", cada uma com o texto da respectiva alternativa. O item também deve conter um "correct_answer" com a letra da alternativa correta e uma "explanation" explicando por que essa resposta está correta. Se o tipo for "dissertativa", deve conter um "answer" com a resposta por extenso. Tome cuidado para não criar alternativas muito grandes que possam exceder 120 caracteres',
   });
 }
 
 async function createVectorStore(userId: string, tema: string) {
-  return await openai.beta.vectorStores.create({ name: `${tema}_${userId}` });
+  return await openai.vectorStores.create({ name: `${tema}_${userId}` });
 }
 
 async function uploadFiles(vectorStoreId: string, files: File[]) {
-  let fileBatch = await openai.beta.vectorStores.fileBatches.uploadAndPoll(vectorStoreId, { files });
+  let fileBatch = await openai.vectorStores.fileBatches.uploadAndPoll(vectorStoreId, { files });
   while (fileBatch.status !== "completed") {
     await new Promise((resolve) => setTimeout(resolve, 300));
-    fileBatch = await openai.beta.vectorStores.fileBatches.retrieve(vectorStoreId, fileBatch.id);
+    fileBatch = await openai.vectorStores.fileBatches.retrieve(vectorStoreId, fileBatch.id);
   }
 }
 

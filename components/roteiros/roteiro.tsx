@@ -79,14 +79,6 @@ export default function StudyItineraryPage(data: {data:any}) {
                     <Share className="w-4 h-4 mr-2" />
                     Compartilhar Roteiro
                   </Button>
-                  <Button color="default"  className='w-full' >
-                    <Download className="w-4 h-4 mr-2" />
-                    Baixar como PDF
-                  </Button>
-                  <Button color="default" className='w-full' >
-                    <Printer className="w-4 h-4 mr-2" />
-                    Imprimir roteiro
-                  </Button>
                 </CardFooter>
               </Card>
             </div>

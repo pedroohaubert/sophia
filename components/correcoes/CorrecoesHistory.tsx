@@ -35,7 +35,7 @@ export default function CorrectionsHistory() {
                     <ModalBody>
                         {!corrections.length && <p>Nenhuma correção encontrada</p>}
                         {corrections.map((correction: any) => (
-                            <p key={correction.id}> <Link href={`/correcoes/${correction.id}`}>Erros:{correction.content.resumoCorrecao.totalErros}, Frase: {correction.content.correcoes[0].frase} {new Date(correction.date).toLocaleDateString('pt-BR')} </Link></p>
+                            <p key={correction.id}> <Link href={`/correcoes/${correction.id}`}>Erros:{correction.content?.resumoCorrecao?.totalErros}, Frase: {correction.content?.correcoes?.[0]?.frase} {new Date(correction.date).toLocaleDateString('pt-BR')} </Link></p>
                         ))}
                     </ModalBody>
                     <ModalFooter>

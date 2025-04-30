@@ -9,8 +9,6 @@ export default function Correcoes() {
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
     const [texto, setTexto] = useState("");
-    const [files, setFiles] = useState<FileList | null>(null);
-    const [fileError, setFileError] = useState("");
 
     useEffect(() => {
         const token = localStorage.getItem("sophia_token");
@@ -24,21 +22,20 @@ export default function Correcoes() {
         setLoading(true);
         setError("");
 
-        try {
-            const formData = new FormData();
-            formData.append("texto", texto);
-            if (files) {
-                for (let i = 0; i < files.length; i++) {
-                    formData.append("files", files[i]);
-                }
-            }
+        if (!token) {
+            setError("Erro de autenticação. Faça login novamente.");
+            setLoading(false);
+            return;
+        }
 
+        try {
             const response = await fetch("/api/correcao", {
                 method: "POST",
                 headers: {
-                    "Token": token as string,
+                    "Token": token,
+                    "Content-Type": "application/json",
                 },
-                body: formData,
+                body: JSON.stringify({ texto: texto }),
             });
 
             if (response.ok) {
@@ -49,30 +46,11 @@ export default function Correcoes() {
                 setError(errorData.message);
             }
         } catch (error) {
-            setError("Erro interno do servidor");
+            console.error("Erro na chamada fetch:", error);
+            setError("Erro ao conectar com o servidor. Verifique sua conexão.");
         }
 
         setLoading(false);
-    }
-
-    function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-        const files = e.target.files;
-        if (files) {
-            let isValid = true;
-            for (let i = 0; i < files.length; i++) {
-                if (files[i].type !== "application/pdf") {
-                    isValid = false;
-                    break;
-                }
-            }
-            if (isValid) {
-                setFiles(files);
-                setFileError("");
-            } else {
-                setFiles(null);
-                setFileError("Only PDF files are allowed.");
-            }
-        }
     }
 
     return (
@@ -81,11 +59,8 @@ export default function Correcoes() {
             <CorrectionsForm
                 texto={texto}
                 setTexto={setTexto}
-                files={files}
-                fileError={fileError}
                 loading={loading}
                 error={error}
-                handleFileChange={handleFileChange}
                 handleSubmit={handleSubmit}
             />
         </div>

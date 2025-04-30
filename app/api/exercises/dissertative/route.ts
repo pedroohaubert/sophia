@@ -8,7 +8,7 @@ export async function POST(request: Request) {
     const parameters = await request.json();
 
     const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini-2024-07-18",
+        model: "gpt-4.1-mini",
         response_format: { type: "json_object" },
         messages: [
             {

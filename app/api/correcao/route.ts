@@ -2,158 +2,272 @@ import OpenAI from "openai";
 import { verifyJWT } from "@/lib/util";
 import { PrismaClient } from "@prisma/client";
 import { v4 as uuidv4 } from "uuid";
+import { z } from "zod";
+import { zodResponseFormat } from "openai/helpers/zod";
 
 
 const prisma = new PrismaClient();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const JINA_URL = process.env.JINA_URL;
-const JINA_API_KEY = process.env.JINA_API_KEY;
 
 // Funções auxiliares
-const getTokenFromHeaders = (headers: Headers) => headers.get("Token");
+const getTokenFromHeaders = (headers: Headers): string | null => headers.get("Token");
 
-const validateToken = async (token: string | null, secret: string) => {
-  if (!token) throw new Error("Token não encontrado");
-  const decoded = await verifyJWT(token, secret);
-  if (typeof decoded === "object") return decoded.id;
-  throw new Error("Token inválido");
-};
-
-const getFilesFromFormData = (formData: FormData) => {
-  const uploadedFiles = formData.getAll("files");
-  return uploadedFiles.filter((file) => file instanceof File) as File[];
-};
-
-const handleFileUpload = async (files: File[], vectorStoreId: string) => {
-  let filebatch = await openai.beta.vectorStores.fileBatches.uploadAndPoll(
-    vectorStoreId,
-    { files }
-  );
-
-  while (filebatch.status !== "completed") {
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    filebatch = await openai.beta.vectorStores.fileBatches.retrieve(
-      vectorStoreId,
-      filebatch.id
-    );
+const validateToken = async (token: string | null, secret: string): Promise<string> => {
+  console.log("Iniciando validação do token");
+  if (!token) {
+    console.error("Token não encontrado nos headers");
+    throw new Error("Token não encontrado");
   }
-
-  return filebatch;
-};
-
-const processTextCorrection = async (
-  assistantId: string,
-  text: string,
-  vectorStoreId?: string
-) => {
-  const thread = await openai.beta.threads.create();
-
-  await openai.beta.threads.messages.create(thread.id, {
-    role: "user",
-    content: JSON.stringify(text ? { text } : "corrija o conteúdo do arquivo"),
-  });
-
-  const run = await openai.beta.threads.runs.create(thread.id, {
-    assistant_id: assistantId,
-  });
-
-  let retrieveRun = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-
-  while (retrieveRun.status !== "completed") {
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    retrieveRun = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+  try {
+    const decoded = await verifyJWT(token, secret);
+    if (typeof decoded === "object" && decoded.id) {
+      console.log(`Token validado com sucesso para o usuário ID: ${decoded.id}`);
+      return decoded.id;
+    }
+    console.error("Decodificação do token falhou ou ID não encontrado", decoded);
+    throw new Error("Token inválido");
+  } catch (error) {
+    console.error("Erro durante a verificação do JWT:", error);
+    throw new Error("Token inválido");
   }
-
-  return retrieveRun;
 };
 
 const saveCorrectionResult = async (
   uuid: string,
-  id: string,
+  userId: string,
   text: string,
   parsedContent: any
-) => {
-  return await prisma.correcao.create({
-    data: {
-      id: uuid,
-      v: 1,
-      date: new Date(),
-      params: { texto: text },
-      authorId: id,
-      content: parsedContent,
-    },
-  });
+): Promise<{ id: string }> => {
+  console.log(`Tentando salvar resultado da correção para o usuário ${userId} com UUID ${uuid}`);
+  try {
+    const result = await prisma.correcao.create({
+      data: {
+        id: uuid,
+        v: 1,
+        date: new Date(),
+        params: { texto: text },
+        authorId: userId,
+        content: parsedContent,
+      },
+      select: { id: true } // Seleciona apenas o ID para retornar
+    });
+    console.log(`Correção salva com sucesso no banco de dados com ID: ${result.id}`);
+    return result;
+  } catch (error) {
+    console.error(`Erro ao salvar correção no banco de dados para UUID ${uuid}:`, error);
+    throw new Error("Falha ao salvar o resultado da correção");
+  }
 };
+
+const Localizacao = z.object({
+  sessao: z.string(),
+  proximoDe: z.string()
+});
+
+const Erro = z.object({
+  tipo: z.enum(["gramatica", "ortografia", "pontuacao", "estilo", "precisaoDados"]),
+  descricao: z.string()
+});
+
+const Correcao = z.object({
+  localizacao: Localizacao,
+  frase: z.string(),
+  erro: Erro,
+  sugestao: z.string(),
+  status: z.enum(["corrigido", "pendente"])
+});
+
+const NotaRevisao = z.object({
+  localizacao: Localizacao,
+  comentario: z.string(),
+  sugestao: z.string()
+});
+
+const Categorias = z.object({
+  gramatica: z.number(),
+  ortografia: z.number(),
+  pontuacao: z.number(),
+  estilo: z.number(),
+  precisaoDados: z.number()
+});
+
+const ResumoCorrecao = z.object({
+  totalErros: z.number(),
+  categorias: Categorias,
+  melhoriasSugeridas: z.string()
+});
+
+const CorrecaoTextoSchema = z.object({
+  resumoCorrecao: ResumoCorrecao,
+  correcoes: z.array(Correcao),
+  notasRevisao: z.array(NotaRevisao)
+});
 
 // Handlers
 export async function POST(request: Request) {
+  const requestStartTime = Date.now();
+  const requestId = uuidv4(); // ID único para rastrear esta requisição nos logs
+  console.log(`[${requestId}] Iniciando processamento da requisição POST /api/correcao`);
+
   try {
-    const formData = await request.formData();
+    let rawBody: string | undefined;
+    let body: any;
+    try {
+      // Primeiro, tenta ler o corpo como texto para log em caso de erro
+      rawBody = await request.text();
+      body = JSON.parse(rawBody); // Agora tenta parsear o texto lido
+      console.log(`[${requestId}] Corpo da requisição JSON parseado com sucesso.`);
+    } catch (jsonError) {
+      console.error(`[${requestId}] Erro ao parsear o JSON do corpo da requisição:`, jsonError);
+      console.error(`[${requestId}] Corpo da requisição bruto recebido: ${rawBody}`); // Loga o corpo bruto
+      throw new Error("Corpo da requisição contém JSON inválido.");
+    }
+
     const token = getTokenFromHeaders(request.headers);
     const secret = process.env.SECRET;
 
-    if (!secret) throw new Error("Erro interno do servidor");
+    if (!secret) {
+      console.error(`[${requestId}] Variável de ambiente SECRET não configurada.`);
+      throw new Error("Erro interno do servidor: configuração ausente.");
+    }
 
     const userId = await validateToken(token, secret);
-    const uuid = uuidv4();
-    const text = formData.get("texto") as string;
-    const files = getFilesFromFormData(formData);
+    console.log(`[${requestId}] Token validado para o usuário ID: ${userId}`);
 
-    let assistant = await openai.beta.assistants.create({
-      name: uuid,
-      model: "gpt-4o-mini",
-      tools: [{ type: "file_search" }],
-      instructions:
-        'Você é um assistente de correção de textos e trabalhos. Dado uma entrada do usuário corrija o texto ou o arquivo enviado por ele. de a resposta no seguinte formato json {"resumoCorrecao": {"totalErros": 25,"categorias": {"gramatica": 10,"ortografia": 7,"pontuacao": 5,"estilo": 2,"precisaoDados": 1},"melhoriasSugeridas": "Revisar a precisão dos dados e corrigir a gramática nas sessões indicadas."},"correcoes": [{"localizacao": {"sessao": "Introducao","proximoDe": "subtitulo: Mudancas Climaticas"},"frase": "O homem é a causa principais das mudanças climáticas.","erro": {"tipo": "gramatica","descricao": "Concordância verbal incorreta"},"sugestao": "O homem é a causa principal das mudanças climáticas.","status": "corrigido"},{"localizacao": {"sessao": "Conclusao","proximoDe": "paragrafo final"},"frase": "As pessoas deviam refletir sobre os seu atos.","erro": {"tipo": "ortografia","descricao": "Erro de ortografia: "seu" deve ser "seus"."},"sugestao": "As pessoas deviam refletir sobre os seus atos.","status": "corrigido"},{"localizacao": {"sessao": "Capitulo2","proximoDe": "subtitulo: Impacto no Brasil"},"frase": "A emissão de CO2 no Brasil é a maior do mundo.","erro": {"tipo": "precisaoDados","descricao": "Informação incorreta: O Brasil não é o maior emissor de CO2 no mundo."},"sugestao": "Corrigir para: A emissão de CO2 no Brasil está entre as mais altas da América Latina, mas não é a maior do mundo.","status": "pendente"}],"notasRevisao": [{"localizacao": {"sessao": "Capitulo1","proximoDe": "inicio do capitulo"},"comentario": "Considerar adicionar uma fonte de pesquisa para suportar essa afirmação.","sugestao": "Adicionar referência acadêmica."}]}",}); Tenha em mente que precisão dos dados se trata da veracidade das informações ali presentes. O json não deve começar com ```json e sim com { e terminar com }. deve ser um json convertivel atráves do metodo JSON.parse Utilize sempre de aspas duplas para as chaves e valores do json.',
-    });
+    const text = body.texto as string;
+    if (!text || typeof text !== 'string' || text.trim() === '') {
+        console.error(`[${requestId}] Texto para correção ausente ou inválido.`);
+        return new Response(JSON.stringify({ error: "Texto para correção é obrigatório." }), { status: 400 });
+    }
+    console.log(`[${requestId}] Texto recebido para correção (primeiros 100 chars): ${text.substring(0, 100)}...`);
 
-    const vectorStore = await openai.beta.vectorStores.create({ name: uuid });
+    console.log(`[${requestId}] Iniciando chamada para chat.completions`);
+    let completionResponse;
+    let content: string | null = null;
+    try {
+        completionResponse = await openai.chat.completions.create({
+            model: "o4-mini",
+            reasoning_effort: "medium",
+            response_format: zodResponseFormat(CorrecaoTextoSchema, "correcao"),
+            messages: [
+                {
+                    role: "system",
+                    content: 'Você é um assistente especialista em revisão e correção de textos acadêmicos e gerais em português brasileiro. Analise o texto fornecido pelo usuário e identifique erros de gramática, ortografia, pontuação, estilo e precisão de dados. Para cada erro, forneça a localização aproximada, a frase original, o tipo e descrição do erro, e uma sugestão de correção. Além disso, inclua notas de revisão para melhorias gerais e um resumo quantitativo dos erros por categoria. A precisão dos dados refere-se à veracidade das informações apresentadas. Sua resposta deve seguir estritamente o schema Zod fornecido.',
+                },
+                {
+                    role: "user",
+                    content: text,
+                },
+            ],
+            max_completion_tokens: 100000,
+        });
 
-    if (files.length > 0) {
-      await handleFileUpload(files, vectorStore.id);
+        console.log(`[${requestId}] Chamada para chat.completions bem-sucedida.`);
+        content = completionResponse.choices[0].message?.content ?? null;
 
-      assistant = await openai.beta.assistants.update(assistant.id, {
-        tool_resources: { file_search: { vector_store_ids: [vectorStore.id] } },
-      });
+        if (!content) {
+            console.error(`[${requestId}] Resposta da API de chat estava vazia ou nula.`);
+            throw new Error("Serviço de correção retornou uma resposta vazia.");
+        }
+        console.log(`[${requestId}] Resposta bruta do chat recebida (primeiros 200 chars): ${content.substring(0, 200)}...`);
+
+    } catch (error) {
+        console.error(`[${requestId}] Erro durante a chamada para chat.completions ou validação Zod:`, error);
+        if (error instanceof z.ZodError) {
+             console.error(`[${requestId}] Detalhes do erro de validação Zod:`, error.errors);
+             throw new Error("Formato de resposta inválido recebido do serviço de correção.");
+        }
+        throw new Error("Falha ao comunicar com o serviço de correção ou processar a resposta.");
     }
 
-    const correctionRun = await processTextCorrection(assistant.id, text);
+    if (!content) {
+        console.error(`[${requestId}] Resposta da API de chat estava vazia ou nula após tentativa de parse pelo Zod.`);
+        throw new Error("Serviço de correção retornou uma resposta vazia ou inválida.");
+    }
+    console.log(`[${requestId}] Objeto de resposta recebido e validado pelo Zod:`, JSON.stringify(content).substring(0, 200) + '...');
 
-    if (correctionRun.status === "completed") {
-      const messages = await openai.beta.threads.messages.list(
-        correctionRun.thread_id
-      );
-      const content = (messages as any).body.data[0].content[0].text.value;
-      const parsedContent = JSON.parse(content);
+    // Faz o parse do content string para um objeto JavaScript antes de salvar
+    const parsedContent = JSON.parse(content);
 
-      const savedContent = await saveCorrectionResult(uuid, userId, text, parsedContent);
+    const savedContent = await saveCorrectionResult(requestId, userId, text, parsedContent);
+    console.log(`[${requestId}] Correção salva no banco de dados com ID: ${savedContent.id}`);
 
-      return new Response(JSON.stringify({ id: savedContent.id }));
+    const duration = Date.now() - requestStartTime;
+    console.log(`[${requestId}] Requisição POST /api/correcao concluída com sucesso em ${duration}ms.`);
+
+    return new Response(JSON.stringify({ id: savedContent.id }), { status: 200 });
+
+  } catch (error: unknown) {
+    const duration = Date.now() - requestStartTime;
+    const errorMessage = error instanceof Error ? error.message : "Erro desconhecido ocorreu";
+    let statusCode = 500;
+
+    console.error(`[${requestId}] Erro no processamento da requisição POST /api/correcao após ${duration}ms:`, error);
+
+
+    if (errorMessage === "Token não encontrado" || errorMessage === "Token inválido") {
+      statusCode = 401;
+    } else if (errorMessage.includes("obrigatório") || errorMessage.includes("inválido")) {
+        statusCode = 400;
+    } else if (errorMessage.includes("Timeout")) {
+        statusCode = 504;
+    } else if (errorMessage.includes("Falha ao salvar") || errorMessage.includes("Falha ao comunicar") || errorMessage.includes("Formato de resposta inválido")) {
+        statusCode = 500;
+    } else if (errorMessage.includes("configuração ausente")) {
+        statusCode = 500;
+    } else if (errorMessage.includes("JSON inválido")) {
+        statusCode = 400;
     }
 
-    throw new Error("Erro interno do servidor");
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Erro desconhecido";
-    return new Response(errorMessage, { status: 500 });
+    return new Response(JSON.stringify({ error: errorMessage }), { status: statusCode });
   }
 }
 
 export async function GET(request: Request) {
+   const requestStartTime = Date.now();
+   const requestId = uuidv4();
+   console.log(`[${requestId}] Iniciando processamento da requisição GET /api/correcao`);
+
   try {
     const token = getTokenFromHeaders(request.headers);
     const secret = process.env.SECRET;
 
-    if (!secret) throw new Error("Erro interno do servidor");
+    if (!secret) {
+        console.error(`[${requestId}] Variável de ambiente SECRET não configurada.`);
+        throw new Error("Erro interno do servidor: configuração ausente.");
+    }
 
     const userId = await validateToken(token, secret);
+    console.log(`[${requestId}] Buscando correções para o usuário ID: ${userId}`);
+
 
     const correcoes = await prisma.correcao.findMany({
       where: { authorId: userId },
+      orderBy: {
+          date: 'desc'
+      }
     });
+    console.log(`[${requestId}] Encontradas ${correcoes.length} correções para o usuário ${userId}.`);
 
-    return new Response(JSON.stringify(correcoes));
-  } catch (error) {
+    const duration = Date.now() - requestStartTime;
+    console.log(`[${requestId}] Requisição GET /api/correcao concluída com sucesso em ${duration}ms.`);
+    return new Response(JSON.stringify(correcoes), { status: 200 });
+
+  } catch (error: unknown) {
+    const duration = Date.now() - requestStartTime;
     const errorMessage = error instanceof Error ? error.message : "Erro desconhecido";
-    return new Response(errorMessage, { status: 500 });
+    let statusCode = 500;
+
+    console.error(`[${requestId}] Erro no processamento da requisição GET /api/correcao após ${duration}ms:`, error);
+
+    if (errorMessage === "Token não encontrado" || errorMessage === "Token inválido") {
+      statusCode = 401;
+    } else if (errorMessage.includes("configuração ausente")) {
+        statusCode = 500;
+    }
+
+    return new Response(JSON.stringify({ error: errorMessage }), { status: statusCode });
   }
 }
+
+

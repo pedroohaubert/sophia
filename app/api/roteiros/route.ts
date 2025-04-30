@@ -2,6 +2,9 @@ import OpenAI from "openai";
 import { verifyJWT } from "@/lib/util";
 import { PrismaClient } from "@prisma/client";
 import { v4 as uuidv4 } from "uuid";
+import { z } from "zod";
+import { zodResponseFormat } from "openai/helpers/zod";
+import { tool } from "ai";
 
 const prisma = new PrismaClient();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -23,7 +26,7 @@ async function validateToken(token: string | null, secret: string): Promise<stri
 // Função auxiliar para gerar querys otimizadas
 async function generateOptimizedQueries(parameters: any): Promise<string[]> {
   const queryResponse = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "gpt-4.1-mini",
     messages: [
       {
         role: "system",
@@ -46,7 +49,8 @@ async function generateOptimizedQueries(parameters: any): Promise<string[]> {
 // Função auxiliar para buscar conteúdo da web usando as querys geradas
 async function fetchWebContent(query: string): Promise<any[]> {
   try {
-    const busca = `${JINA_URL}${query}`;
+    const formattedQuery = query.replace(/ /g, "%20");
+    const busca = `${JINA_URL}${formattedQuery}`;
     console.log(busca);
 
     const webContent = await fetch(busca, {
@@ -55,6 +59,8 @@ async function fetchWebContent(query: string): Promise<any[]> {
         Authorization: `Bearer ${JINA_API_KEY}`,
         Accept: "application/json",
         "X-Locale": "pt-BR",
+        "X-With-Generated-Alt": "true",
+        "X-Engine": "direct"
       },
     });
 
@@ -66,25 +72,114 @@ async function fetchWebContent(query: string): Promise<any[]> {
   }
 }
 
+
+// Zod Schema for Study Plan
+const StudyPlanItemSchema = z.object({
+  title: z.string(),
+  duration: z.string(),
+  content: z.string(), // Assuming content is HTML string
+});
+
+const StudyPlanDetailsSchema = z.object({
+  timeToComplete: z.string(),
+  objective: z.string(),
+});
+
+const StudyPlanSchema = z.object({
+  items: z.array(StudyPlanItemSchema),
+  title: z.string(),
+  description: z.string(),
+  instructions: z.string(),
+  introduction: z.string(),
+  details: StudyPlanDetailsSchema,
+});
+
 // Função para criar roteiro baseado em parâmetros e conteúdo da web
 async function generateStudyPlan(parameters: any): Promise<any> {
   const studyPlanResponse = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "o4-mini",
+    reasoning_effort: "medium",
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "webSearch",
+          description: "Buscar conteúdo na web, utilize essa ferramenta para buscar conteúdo na web para complementar suas respostas, não é necessário pedir permissão do usuário para isto, no final de toda resposta referêncie os links que foram retornados pela busca. Utilize SEMPRE que possível essa ferramenta para buscar conteúdo na web, mesmo que o usuário não tenha pedido, pois isso enriquece a experiência do usuário. Quando for procurar por uma imagem pesquise só o nome da coisa pesquisa só cachorro e não imagem de um cachorro",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "Query para busca na web"
+              }
+            },
+            required: ["query"],
+            additionalProperties: false
+          }
+        }
+      }
+    ],
+    tool_choice: "auto",
+    response_format: zodResponseFormat(StudyPlanSchema, "studyPlan"),
     messages: [
       {
         role: "system",
-        content: 'Você é um assistente de IA educacional especializado em gerar roteiros de estudo personalizados. Ao receber uma solicitação de um usuário, responda em formato JSON utilizando o seguinte padrão: {"items":[{"title":"Introduction to React","duration":"2 hours","content":"<p>Learn the basics of React, including components, props, and state.</p>"},{"title":"State Management","duration":"1.5 hours","content":"<p>Explore state management in React, focusing on hooks like useState and useContext.</p>"},{"title":"React Router","duration":"1 hour","content":"<p>Understand how to implement routing in React applications using React Router.</p>"},{"title":"API Integration","duration":"2 hours","content":"<p>Learn how to integrate APIs into your React app using fetch or axios.</p>"},{"title":"Testing React Applications","duration":"1.5 hours","content":"<p>Introduction to testing React components using Jest and React Testing Library.</p>"}],"title":"React Development","description":"A comprehensive guide to learning React, from the basics to advanced topics.","instructions":"You may study 2 hours a day...", "introduction": "some text here" ,"details":{"timeToComplete":"8 hours","objective":"Learn how to build modern web applications using React."}}. Dentro do campo "content" de cada item, insira um texto em formato HTML com tudo que o usuário deve ver sobre aquele tópico e com os links relacionados ao tópico ali. Ao citar fontes, inclua apenas links confiáveis verficador e fornecidos atráves do webContent, evitando mencionar sites ou vídeos cujos links não sejam 100% seguros e válidos. Ajuste a profundidade e o estilo das explicações de acordo com o nível de complexidade necessário, garantindo clareza e organização no conteúdo apresentado. Forneça um roteiro completo e bem feito, abordando o tema da melhor maneira possível. Não inicie os HTMLs com ```html nem o JSON com ````json, apenas insira o código HTML e json diretamente. Utilize o texto fornecido dentro do parâmetro webContent para ajudar a gerar o roteiro e utilize os links junto ao roteiro. Deixe os links destacados em azul, sublinhados e sempre faça com que eles tenham target="_blank". A seguir vem uma descrição do que é um roteiro de estudos e quais tópicos você deve prestar atenção: Um roteiro de estudos é um documento que serve para organizar tudo o que você precisa estudar em um determinado prazo, a ordem em que pretende fazer isso e de que modo. A ideia é especificar as disciplinas, exercícios, pesquisas, atividades complementares e quaisquer outras estratégias adotadas para o aprendizado. É importante que o roteiro considere desde a parte teórica, com a leitura do material, até a prática, com exercícios de fixação, pesquisas e a revisão. Dessa maneira, você pode concluir todas as etapas no período disponível para fazer isso. Avalie a sua disponibilidade de tempo. Uma parte essencial do roteiro é especificar quais momentos serão dedicados a quais matérias. Para isso, o primeiro passo é contabilizar quantas horas por dia você vai poder estudar. Se só conseguir fazer isso em um turno, por exemplo, então o roteiro deve ser organizado de acordo com tal disponibilidade de tempo. Determine o que vai estudar. Faça uma lista dos conteúdos a serem estudados. E por ultimo, de a resposta inteira em português brasileiro, não coloque nada sem ser alguns termos necessários em outras linguas',
+        content: 'Você é um assistente de IA educacional especializado em gerar roteiros de estudo personalizados. Ao receber uma solicitação de um usuário, responda em formato JSON utilizando o schema definido. Dentro do campo "content" de cada item, insira um texto em formato HTML com tudo que o usuário deve ver sobre aquele tópico e com os links relacionados ao tópico ali. Ao citar fontes, inclua apenas links confiáveis verficador e fornecidos atráves do webContent, evitando mencionar sites ou vídeos cujos links não sejam 100% seguros e válidos. Ajuste a profundidade e o estilo das explicações de acordo com o nível de complexidade necessário, garantindo clareza e organização no conteúdo apresentado. Forneça um roteiro completo e bem feito, abordando o tema da melhor maneira possível. Não inicie os HTMLs com ```html nem o JSON com ````json, apenas insira o código HTML e json diretamente. Utilize o texto fornecido dentro do parâmetro webContent para ajudar a gerar o roteiro e utilize os links junto ao roteiro. Deixe os links destacados em azul, sublinhados e sempre faça com que eles tenham target="_blank". Se precisar de mais informações sobre o tema ou exemplos adicionais, você pode utilizar a ferramenta de busca na web para encontrar conteúdo relevante. A seguir vem uma descrição do que é um roteiro de estudos e quais tópicos você deve prestar atenção: Um roteiro de estudos é um documento que serve para organizar tudo o que você precisa estudar em um determinado prazo, a ordem em que pretende fazer isso e de que modo. A ideia é especificar as disciplinas, exercícios, pesquisas, atividades complementares e quaisquer outras estratégias adotadas para o aprendizado. É importante que o roteiro considere desde a parte teórica, com a leitura do material, até a prática, com exercícios de fixação, pesquisas e a revisão. Dessa maneira, você pode concluir todas as etapas no período disponível para fazer isso. Avalie a sua disponibilidade de tempo. Uma parte essencial do roteiro é especificar quais momentos serão dedicados a quais matérias. Para isso, o primeiro passo é contabilizar quantas horas por dia você vai poder estudar. Se só conseguir fazer isso em um turno, por exemplo, então o roteiro deve ser organizado de acordo com tal disponibilidade de tempo. Determine o que vai estudar. Faça uma lista dos conteúdos a serem estudados. E por ultimo, de a resposta inteira em português brasileiro, não coloque nada sem ser alguns termos necessários em outras linguas',
       },
       {
         role: "user",
         content: JSON.stringify(parameters),
       },
     ],
-    temperature: 1,
-    max_tokens: 16384,
+    max_completion_tokens: 100000,
     top_p: 1,
     frequency_penalty: 0,
-    presence_penalty: 0,
+    presence_penalty: 0
+  });
+
+  // Processar tool_calls se houver
+  const toolCalls = studyPlanResponse.choices[0].message.tool_calls;
+  if (toolCalls && toolCalls.length > 0) {
+    const webSearchCalls = toolCalls.filter(
+      (call) => call.function.name === "webSearch"
+    );
+    
+    const results = await Promise.all(
+      webSearchCalls.map(async (call) => {
+        const args = JSON.parse(call.function.arguments);
+        return await fetchWebContent(args.query);
+      })
+    );
+    
+    parameters.webContent = results.flat();
+    
+    // Segunda chamada para incorporar os resultados
+    return await generateStudyPlanWithResults(parameters);
+  }
+
+  return JSON.parse(studyPlanResponse.choices[0].message?.content ?? "");
+}
+
+// Função adicional para gerar o roteiro final com os resultados da busca
+async function generateStudyPlanWithResults(parameters: any): Promise<any> {
+  const studyPlanResponse = await openai.chat.completions.create({
+    model: "o4-mini",
+    reasoning_effort: "medium",
+    response_format: zodResponseFormat(StudyPlanSchema, "studyPlan"),
+    messages: [
+      {
+        role: "system",
+        content: 'Você é um assistente de IA educacional especializado em gerar roteiros de estudo personalizados. Ao receber uma solicitação de um usuário com resultados de busca na web, responda em formato JSON seguindo o schema definido. Dentro do campo "content" de cada item, insira um texto em formato HTML com tudo que o usuário deve ver sobre aquele tópico e com os links relacionados ao tópico ali. Ao citar fontes, inclua apenas links confiáveis verificados e fornecidos através do webContent, evitando mencionar sites ou vídeos cujos links não sejam 100% seguros e válidos. Ajuste a profundidade e o estilo das explicações de acordo com o nível de complexidade necessário, garantindo clareza e organização no conteúdo apresentado. Forneça um roteiro completo e bem feito, abordando o tema da melhor maneira possível. Utilize o texto fornecido dentro do parâmetro webContent para ajudar a gerar o roteiro e utilize os links junto ao roteiro. Deixe os links destacados em azul, sublinhados e sempre faça com que eles tenham target="_blank". Você pode utilizar a ferramenta de busca na web para complementar o roteiro com mais informações relevantes se necessário. A resposta inteira deve ser em português brasileiro, não coloque nada sem ser alguns termos necessários em outras línguas.',
+      },
+      {
+        role: "user",
+        content: JSON.stringify(parameters),
+      },
+    ],
+    max_completion_tokens: 100000,
+    top_p: 1,
+    frequency_penalty: 0,
+    presence_penalty: 0
   });
 
   return JSON.parse(studyPlanResponse.choices[0].message?.content ?? "");

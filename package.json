@@ -14,10 +14,11 @@
     "@nextui-org/select": "^2.2.5",
     "@nextui-org/system": "^2.2.5",
     "@nextui-org/theme": "^2.2.9",
-    "@prisma/client": "^5.17.0",
+    "@prisma/client": "^5.22.0",
     "@radix-ui/react-hover-card": "^1.1.1",
     "@radix-ui/react-separator": "^1.1.0",
     "@radix-ui/react-slot": "^1.1.0",
+    "@tinymce/tinymce-react": "^6.1.0",
     "ai": "^3.4.29",
     "bcrypt": "^5.1.1",
     "class-variance-authority": "^0.7.0",
@@ -30,7 +31,7 @@
     "markdown-parser-react": "^1.1.2",
     "mongoose": "^8.4.1",
     "next": "14.2.3",
-    "openai": "^4.53.2",
+    "openai": "^4.96.2",
     "react": "^18",
     "react-dom": "^18",
     "react-markdown": "^9.0.1",
@@ -41,7 +42,9 @@
     "tailwind-merge": "^2.5.2",
     "tailwindcss-animate": "^1.0.7",
     "tiktoken": "^1.0.17",
-    "uuid": "^10.0.0"
+    "tinymce": "^7.8.0",
+    "uuid": "^10.0.0",
+    "zod": "^3.24.3"
   },
   "devDependencies": {
     "@flydotio/dockerfile": "^0.5.8",
@@ -53,8 +56,9 @@
     "@types/uuid": "^9.0.8",
     "eslint": "^8",
     "eslint-config-next": "14.2.3",
+    "mini-css-extract-plugin": "^2.9.2",
     "postcss": "^8",
-    "prisma": "^5.17.0",
+    "prisma": "^5.22.0",
     "tailwindcss": "^3.4.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.4"
